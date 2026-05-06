@@ -1,0 +1,93 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 0. Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() { return request.auth != null; }
+    function getUserData() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function hasRole(role) { return isSignedIn() && getUserData().role == role; }
+    
+    function isAdmin() { return hasRole('admin'); }
+    function isDoctor() { return hasRole('doctor'); }
+    function isNurse() { return hasRole('nurse'); }
+    function isPharmacist() { return hasRole('pharmacist'); }
+    function isAccountant() { return hasRole('accountant'); }
+    function isStaff() { return isSignedIn() && getUserData().role != null; }
+
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    
+    function isValidId(id) { 
+      return id is string && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // --- Validation Blueprints ---
+    
+    function isValidPatient(data) {
+      return data.firstName is string && data.firstName.size() <= 50 &&
+             data.lastName is string && data.lastName.size() <= 50 &&
+             data.gender in ['male', 'female', 'other'];
+    }
+
+    function isValidUser(data) {
+      return data.name is string && data.name.size() <= 100 &&
+             data.role in ['admin', 'doctor', 'nurse', 'pharmacist', 'accountant'];
+    }
+
+    // --- Collections ---
+
+    match /users/{userId} {
+      allow read: if isSignedIn(); // Staff can see staff list
+      allow create: if isAdmin() || (isSignedIn() && request.auth.uid == userId); 
+      allow update: if (isAdmin() || (isSignedIn() && request.auth.uid == userId)) && (
+        // Only admin can change roles
+        (incoming().role == existing().role) || isAdmin()
+      ) && isValidUser(incoming());
+    }
+
+    match /patients/{patientId} {
+      allow read: if isStaff();
+      allow create: if isStaff() && isValidPatient(incoming());
+      allow update: if isStaff() && isValidPatient(incoming());
+    }
+
+    match /visits/{visitId} {
+      allow read: if isStaff();
+      allow create: if isStaff();
+      allow update: if isStaff();
+    }
+
+    match /prescriptions/{prescriptionId} {
+      allow read: if isStaff();
+      allow create: if isDoctor();
+      allow update: if isDoctor() || isPharmacist();
+    }
+
+    match /labTests/{testId} {
+      allow read: if isStaff();
+      allow create: if isDoctor();
+      allow update: if isDoctor() || isStaff(); // Lab techs update results
+    }
+
+    match /invoices/{invoiceId} {
+      allow read: if isAccountant() || isAdmin();
+      allow write: if isAccountant() || isAdmin();
+    }
+
+    match /inventory/{itemId} {
+      allow read: if isStaff();
+      allow write: if isPharmacist() || isAdmin();
+    }
+
+    match /attendance/{attendanceId} {
+      allow read: if isStaff() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid;
+      allow update: if isSignedIn() && existing().userId == request.auth.uid;
+    }
+  }
+}

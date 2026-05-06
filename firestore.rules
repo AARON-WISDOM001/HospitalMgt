@@ -1,0 +1,105 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 0. Default Deny Everything
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- GLOBAL HELPERS ---
+    function isSignedIn() { return request.auth != null; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() { 
+      return isSignedIn() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') || 
+        request.auth.token.email in ['aaronwisdom43@gmail.com', 'aaronwisdom77@gmail.com']
+      ); 
+    }
+    
+    function hasRole(role) {
+      return isSignedIn() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == role) || 
+        isAdmin()
+      );
+    }
+
+    function isStaff() { 
+      return isSignedIn() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active') || 
+        isAdmin()
+      );
+    }
+
+    // --- VALIDATION BLUEPRINTS ---
+
+    function isValidStaff(data) {
+      return data.get('name', '') is string && 
+             data.get('role', '') in ['admin', 'doctor', 'nurse', 'pharmacist', 'accountant', 'staff'] &&
+             data.get('status', '') in ['active', 'inactive'];
+    }
+
+    function isValidPatient(data) {
+      return data.get('firstName', '') is string && data.get('lastName', '') is string;
+    }
+
+    // --- COLLECTION RULES ---
+
+    match /users/{userId} {
+      allow get, list: if isSignedIn();
+      allow create: if (isSignedIn() && request.auth.uid == userId) && isValidStaff(incoming());
+      allow update: if isSignedIn() && (
+        isAdmin() || 
+        (request.auth.uid == userId && incoming().role == existing().role && incoming().status == existing().status)
+      ) && isValidStaff(incoming());
+      allow delete: if isAdmin();
+    }
+
+    match /patients/{patientId} {
+      allow read: if isStaff();
+      allow write: if isAdmin() || (isStaff() && isValidPatient(incoming()));
+    }
+
+    match /visits/{visitId} {
+      allow read: if isStaff();
+      allow write: if isStaff();
+      allow delete: if isAdmin();
+    }
+
+    match /inventory/{itemId} {
+      allow read: if isStaff();
+      allow write: if isAdmin() || hasRole('pharmacist');
+    }
+
+    match /attendance/{attendanceId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid;
+      allow update: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /prescriptions/{prescriptionId} {
+      allow read: if isStaff();
+      allow write: if isStaff();
+      allow delete: if isAdmin();
+    }
+
+    match /labTests/{testId} {
+      allow read: if isStaff();
+      allow write: if isStaff();
+      allow delete: if isAdmin();
+    }
+
+    match /invoices/{invoiceId} {
+      allow read: if isStaff();
+      allow write: if isStaff();
+      allow delete: if isAdmin();
+    }
+  }
+}

@@ -50,7 +50,7 @@ export default function Dashboard() {
 
         // Calculate revenue (simple sum for demo)
         let totalRev = 0;
-        invoicesSnap.docs.forEach(d => totalRev += (d.data().total || 0));
+        invoicesSnap.docs.forEach(d => totalRev += (d.data().totalAmount || 0));
 
         setStats({
           patientsToday: patientsSnap.size,
@@ -63,7 +63,7 @@ export default function Dashboard() {
         // 2. Fetch Live Queue
         const visitsSnap = await getDocs(query(
           collection(db, 'visits'), 
-          where('status', 'in', ['waiting', 'in-session']),
+          where('status', 'in', ['pending', 'triage', 'doctor', 'lab', 'pharmacy', 'billing']),
           limit(5)
         ));
         
@@ -201,7 +201,7 @@ export default function Dashboard() {
                       <td className="px-6 py-4 text-slate-600 text-xs">Assigned Registry</td>
                       <td className="px-6 py-4">
                         <span className={`px-2 py-1 rounded text-[10px] font-black uppercase tracking-tighter ${
-                          row.status === 'in-session' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
+                          row.status === 'doctor' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
                         }`}>
                           {row.status}
                         </span>

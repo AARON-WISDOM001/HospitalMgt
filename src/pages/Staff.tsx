@@ -36,7 +36,7 @@ export default function Staff() {
 
   useEffect(() => { fetchStaff(); }, []);
 
-  const isAdmin = currentUserProfile?.role === UserRole.ADMIN || ['aaronwisdom43@gmail.com', 'aaronwisdom77@gmail.com'].includes(auth.currentUser?.email || '');
+  const isAdmin = currentUserProfile?.role === UserRole.ADMIN;
 
   const handleAddStaff = async (e: React.FormEvent) => {
     e.preventDefault();

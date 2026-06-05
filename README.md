@@ -2,19 +2,92 @@
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
 
-# Run and deploy your AI Studio app
+# Divine Love Hospital Management System
 
-This contains everything you need to run your app locally.
+A role-based hospital management system built with React, TypeScript, Firebase Auth, and Firestore. Manages patients, visits, prescriptions, lab tests, pharmacy inventory, billing, staff, and attendance.
 
-View your app in AI Studio: https://ai.studio/apps/76c8640f-ff14-4be4-b076-a335f72f4eee
+## Tech Stack
+
+- **Frontend:** React 19, TypeScript, Tailwind CSS, Vite
+- **Backend:** Firebase (Auth + Firestore), Express (dev server)
+- **Deployment:** Vercel (static SPA)
+
+## Roles
+
+| Role        | Access                                              |
+|-------------|-----------------------------------------------------|
+| Admin       | Full access to all modules, staff management        |
+| Doctor      | Patients, visits, prescriptions, lab orders         |
+| Nurse       | Patients, visits, lab orders, vitals                |
+| Pharmacist  | Pharmacy inventory, dispense prescriptions          |
+| Accountant  | Billing / invoices                                  |
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
+**Prerequisites:** Node.js 18+
 
+1. Clone the repo:
+   ```bash
+   git clone https://github.com/AARON-WISDOM001/HospitalMgt.git
+   cd HospitalMgt
+   ```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+3. Create a `.env` file from the example and fill in your Firebase project values:
+   ```bash
+   cp .env.example .env
+   ```
+
+4. Start the dev server:
+   ```bash
+   npm run dev
+   ```
+
+5. Open [http://localhost:3000](http://localhost:3000)
+
+## Build for Production
+
+```bash
+npm run build
+```
+
+Output goes to `dist/`. Deploy the contents to Vercel, Netlify, or any static host.
+
+## Firestore Security Rules
+
+The `firestore.rules` file contains hardened role-based access control:
+
+- Default deny on all paths
+- Role-specific write permissions (doctor-only prescriptions, pharmacist-only dispensing, accountant-only invoices)
+- Field validation with size limits to prevent data poisoning
+- Negative inventory protection
+- Invoice immutability once paid
+- Self-role-change prevention (only admins can modify roles)
+
+Deploy rules via Firebase CLI:
+```bash
+firebase deploy --only firestore:rules
+```
+
+## Project Structure
+
+```
+src/
+├── App.tsx            # Routes + role-based guards
+├── hooks/useAuth.tsx  # Auth context (Firebase Auth + Firestore profile)
+├── lib/
+│   ├── firebase.ts    # Firebase SDK init
+│   ├── errorHandlers.ts
+│   └── utils.ts
+├── pages/             # Dashboard, Patients, Visits, Pharmacy, etc.
+├── components/        # Layout shell
+└── types.ts           # TypeScript interfaces & enums
+```
+
+## License
+
+Private — all rights reserved.

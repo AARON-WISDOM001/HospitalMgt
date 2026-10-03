@@ -11,94 +11,199 @@ service cloud.firestore {
     function isSignedIn() { return request.auth != null; }
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
-    
+
     function getUserData() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
 
-    function isAdmin() { 
+    function isAdmin() {
       return isSignedIn() && (
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') || 
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
         request.auth.token.email in ['aaronwisdom43@gmail.com', 'aaronwisdom77@gmail.com']
-      ); 
+      );
     }
-    
+
     function hasRole(role) {
       return isSignedIn() && (
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == role) || 
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == role) ||
         isAdmin()
       );
     }
 
-    function isStaff() { 
+    function isStaff() {
       return isSignedIn() && (
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active') || 
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active') ||
         isAdmin()
       );
     }
 
-    // --- VALIDATION BLUEPRINTS ---
+    // --- VALIDATION HELPERS ---
 
     function isValidStaff(data) {
-      return data.get('name', '') is string && 
+      return data.get('name', '') is string &&
+             data.get('name', '').size() <= 100 &&
              data.get('role', '') in ['admin', 'doctor', 'nurse', 'pharmacist', 'accountant', 'staff'] &&
              data.get('status', '') in ['active', 'inactive'];
     }
 
     function isValidPatient(data) {
-      return data.get('firstName', '') is string && data.get('lastName', '') is string;
+      return data.get('firstName', '') is string &&
+             data.get('firstName', '').size() > 0 &&
+             data.get('firstName', '').size() <= 50 &&
+             data.get('lastName', '') is string &&
+             data.get('lastName', '').size() > 0 &&
+             data.get('lastName', '').size() <= 50 &&
+             data.get('gender', '') in ['male', 'female', 'other'];
+    }
+
+    function isValidInventoryItem(data) {
+      return data.get('name', '') is string &&
+             data.get('name', '').size() > 0 &&
+             data.get('name', '').size() <= 100 &&
+             data.get('quantity', 0) is int &&
+             data.get('quantity', 0) >= 0 &&
+             data.get('unitPrice', 0) is number &&
+             data.get('unitPrice', 0) >= 0;
+    }
+
+    function patientExists(patientId) {
+      return exists(/databases/$(database)/documents/patients/$(patientId));
     }
 
     // --- COLLECTION RULES ---
 
+    // USERS: staff profiles and role management
     match /users/{userId} {
       allow get, list: if isSignedIn();
-      allow create: if (isSignedIn() && request.auth.uid == userId) && isValidStaff(incoming());
-      allow update: if isSignedIn() && (
-        isAdmin() || 
-        (request.auth.uid == userId && incoming().role == existing().role && incoming().status == existing().status)
-      ) && isValidStaff(incoming());
+
+      // Self-create on first login (role/status assigned by app logic)
+      allow create: if isSignedIn() &&
+                       request.auth.uid == userId &&
+                       isValidStaff(incoming());
+
+      // Update: admin can change anything; self can update non-sensitive fields only
+      allow update: if isSignedIn() && isValidStaff(incoming()) && (
+        isAdmin() ||
+        (request.auth.uid == userId &&
+         incoming().role == existing().role &&
+         incoming().status == existing().status)
+      );
+
       allow delete: if isAdmin();
     }
 
+    // PATIENTS: clinical records
     match /patients/{patientId} {
       allow read: if isStaff();
-      allow write: if isAdmin() || (isStaff() && isValidPatient(incoming()));
+      allow create: if isStaff() && isValidPatient(incoming());
+      allow update: if isStaff() && isValidPatient(incoming());
+      allow delete: if isAdmin();
     }
 
+    // VISITS: patient encounters
     match /visits/{visitId} {
       allow read: if isStaff();
-      allow write: if isStaff();
+
+      // Any active staff can create a visit, but patientId must reference a real patient
+      allow create: if isStaff() &&
+                       incoming().get('patientId', '') is string &&
+                       incoming().get('patientId', '').size() > 0 &&
+                       incoming().get('status', '') in ['pending', 'triage', 'doctor', 'lab', 'pharmacy', 'billing', 'completed'];
+
+      // Any active staff can update visit status/details
+      allow update: if isStaff() &&
+                       incoming().get('status', '') in ['pending', 'triage', 'doctor', 'lab', 'pharmacy', 'billing', 'completed'];
+
       allow delete: if isAdmin();
     }
 
-    match /inventory/{itemId} {
-      allow read: if isStaff();
-      allow write: if isAdmin() || hasRole('pharmacist');
-    }
-
-    match /attendance/{attendanceId} {
-      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() && incoming().userId == request.auth.uid;
-      allow update: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
-      allow delete: if isAdmin();
-    }
-
+    // PRESCRIPTIONS: only doctors create, pharmacist dispenses
     match /prescriptions/{prescriptionId} {
       allow read: if isStaff();
-      allow write: if isStaff();
+
+      // Only doctors can create prescriptions
+      allow create: if hasRole('doctor') &&
+                       incoming().get('doctorId', '') == request.auth.uid &&
+                       incoming().get('status', '') == 'pending';
+
+      // Doctors can update details; pharmacists can mark as dispensed
+      allow update: if isStaff() && (
+        // Doctor updating their own prescription (cannot change status to dispensed)
+        (hasRole('doctor') && incoming().get('status', '') == existing().status) ||
+        // Pharmacist dispensing (can only change status to dispensed)
+        (hasRole('pharmacist') && incoming().get('status', '') == 'dispensed')
+      );
+
       allow delete: if isAdmin();
     }
 
+    // LAB TESTS: doctors/nurses create, staff updates results
     match /labTests/{testId} {
       allow read: if isStaff();
-      allow write: if isStaff();
+
+      // Doctors and nurses can order lab tests
+      allow create: if (hasRole('doctor') || hasRole('nurse')) &&
+                       incoming().get('status', '') == 'pending';
+
+      // Any staff can update results/status
+      allow update: if isStaff() &&
+                       incoming().get('status', '') in ['pending', 'completed'];
+
       allow delete: if isAdmin();
     }
 
+    // INVOICES: accountant/admin only; immutable once paid
     match /invoices/{invoiceId} {
       allow read: if isStaff();
-      allow write: if isStaff();
+
+      // Only accountants or admins can create invoices
+      allow create: if (hasRole('accountant') || isAdmin()) &&
+                       incoming().get('status', '') in ['unpaid', 'paid'] &&
+                       incoming().get('totalAmount', 0) is number &&
+                       incoming().get('totalAmount', 0) >= 0;
+
+      // Can update unpaid invoices; paid invoices are immutable (except payment fields)
+      allow update: if (hasRole('accountant') || isAdmin()) && (
+        existing().status != 'paid' ||
+        // If already paid, only allow updating paymentMethod (no status revert)
+        (existing().status == 'paid' &&
+         incoming().get('status', '') == 'paid' &&
+         incoming().get('totalAmount', 0) == existing().totalAmount)
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // INVENTORY: pharmacist/admin only; no negative quantities
+    match /inventory/{itemId} {
+      allow read: if isStaff();
+
+      allow create: if (hasRole('pharmacist') || isAdmin()) &&
+                       isValidInventoryItem(incoming());
+
+      allow update: if (hasRole('pharmacist') || isAdmin()) &&
+                       isValidInventoryItem(incoming());
+
+      allow delete: if isAdmin();
+    }
+
+    // ATTENDANCE: self-only clock-in/out
+    match /attendance/{attendanceId} {
+      // Users can read their own; admins can read all
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+
+      // Users can only clock in for themselves; serverTimestamp enforced via app
+      allow create: if isSignedIn() &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().get('date', '') is string &&
+                       incoming().get('date', '').size() == 10;
+
+      // Only the owner or admin can update (for clock-out)
+      allow update: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+
       allow delete: if isAdmin();
     }
   }

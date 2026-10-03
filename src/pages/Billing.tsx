@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../lib/firebase';
-import { collection, query, getDocs, orderBy, where, addDoc, serverTimestamp } from 'firebase/firestore';
-import { Invoice } from '../types';
-import { CreditCard, DollarSign, Download, Plus, Filter } from 'lucide-react';
+import { collection, query, getDocs, orderBy, addDoc, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { Invoice, Patient } from '../types';
+import { DollarSign, Download, Plus, Filter, X, CheckCircle2 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
 import { handleFirestoreError, OperationType } from '../lib/errorHandlers';
@@ -10,6 +10,16 @@ import { handleFirestoreError, OperationType } from '../lib/errorHandlers';
 export default function Billing() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [showModal, setShowModal] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [formMsg, setFormMsg] = useState('');
+  const [form, setForm] = useState({
+    patientId: '',
+    description: '',
+    amount: 0,
+    category: 'consultation' as Invoice['items'][number]['category'],
+  });
 
   const stats = {
     todayRevenue: invoices
@@ -37,7 +47,60 @@ export default function Billing() {
     }
   };
 
-  useEffect(() => { fetchInvoices(); }, []);
+  const fetchPatients = async () => {
+    try {
+      const snap = await getDocs(collection(db, 'patients'));
+      setPatients(snap.docs.map(d => ({ id: d.id, ...d.data() } as Patient)));
+    } catch (e) {
+      handleFirestoreError(e, OperationType.GET, 'patients');
+    }
+  };
+
+  useEffect(() => {
+    fetchInvoices();
+    fetchPatients();
+  }, []);
+
+  const handleCreateInvoice = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.patientId || !form.description || form.amount <= 0) {
+      setFormMsg('Select a patient and enter a valid amount.');
+      return;
+    }
+    setSaving(true);
+    setFormMsg('');
+    try {
+      await addDoc(collection(db, 'invoices'), {
+        visitId: '',
+        patientId: form.patientId,
+        items: [{ description: form.description, amount: form.amount, category: form.category }],
+        totalAmount: form.amount,
+        status: 'unpaid',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setShowModal(false);
+      setForm({ patientId: '', description: '', amount: 0, category: 'consultation' });
+      fetchInvoices();
+    } catch (e) {
+      handleFirestoreError(e, OperationType.CREATE, 'invoices');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const markPaid = async (invoice: Invoice) => {
+    try {
+      await updateDoc(doc(db, 'invoices', invoice.id), {
+        status: 'paid',
+        totalAmount: invoice.totalAmount,
+        updatedAt: serverTimestamp(),
+      });
+      fetchInvoices();
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `invoices/${invoice.id}`);
+    }
+  };
 
   const generatePDF = (invoice: Invoice) => {
     const doc = new jsPDF() as any;
@@ -83,7 +146,10 @@ export default function Billing() {
           <button className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-xl font-bold flex items-center text-[10px] uppercase tracking-widest shadow-sm hover:bg-slate-50 active:scale-[0.98]">
             <Filter className="w-3.5 h-3.5 mr-2" /> Segment
           </button>
-          <button className="bg-blue-600 text-white px-4 py-2 rounded-xl font-bold flex items-center text-[10px] uppercase tracking-widest shadow-lg shadow-blue-500/20 hover:bg-blue-700 active:scale-[0.98]">
+          <button
+            onClick={() => setShowModal(true)}
+            className="bg-blue-600 text-white px-4 py-2 rounded-xl font-bold flex items-center text-[10px] uppercase tracking-widest shadow-lg shadow-blue-500/20 hover:bg-blue-700 active:scale-[0.98]"
+          >
             <Plus className="w-3.5 h-3.5 mr-2" /> New Invoice
           </button>
         </div>
@@ -135,13 +201,24 @@ export default function Billing() {
                    </td>
                    <td className="p-4 px-6 text-[10px] text-slate-500 font-black tracking-widest uppercase">{formatDate(inv.createdAt)}</td>
                    <td className="p-4 px-6 text-right">
-                      <button 
-                        onClick={() => generatePDF(inv)}
-                        className="text-blue-600 hover:text-blue-800 p-2 rounded-lg hover:bg-blue-50 transition-all active:scale-90"
-                        title="Download Receipt"
-                      >
-                         <Download className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center justify-end gap-1">
+                        {inv.status === 'unpaid' && (
+                          <button
+                            onClick={() => markPaid(inv)}
+                            className="text-green-600 hover:text-green-800 p-2 rounded-lg hover:bg-green-50 transition-all active:scale-90"
+                            title="Mark as Paid"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                          </button>
+                        )}
+                        <button 
+                          onClick={() => generatePDF(inv)}
+                          className="text-blue-600 hover:text-blue-800 p-2 rounded-lg hover:bg-blue-50 transition-all active:scale-90"
+                          title="Download Receipt"
+                        >
+                           <Download className="w-4 h-4" />
+                        </button>
+                      </div>
                    </td>
                 </tr>
               ))
@@ -149,6 +226,80 @@ export default function Billing() {
           </tbody>
         </table>
       </div>
+
+      {showModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-xl p-8">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-black text-slate-900 uppercase tracking-tight">New Invoice</h3>
+              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-700">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleCreateInvoice} className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Patient</label>
+                <select
+                  value={form.patientId}
+                  onChange={(e) => setForm({ ...form, patientId: e.target.value })}
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                  required
+                >
+                  <option value="">Select patient...</option>
+                  {patients.map(p => (
+                    <option key={p.id} value={p.id}>{p.firstName} {p.lastName}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Description</label>
+                <input
+                  type="text"
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                  placeholder="e.g. Consultation fee"
+                  required
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Amount (₦)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={form.amount}
+                    onChange={(e) => setForm({ ...form, amount: Number(e.target.value) })}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Category</label>
+                  <select
+                    value={form.category}
+                    onChange={(e) => setForm({ ...form, category: e.target.value as Invoice['items'][number]['category'] })}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                  >
+                    <option value="consultation">Consultation</option>
+                    <option value="lab">Lab</option>
+                    <option value="pharmacy">Pharmacy</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+              </div>
+              {formMsg && <p className="text-[11px] font-bold text-red-600">{formMsg}</p>}
+              <button
+                type="submit"
+                disabled={saving}
+                className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all disabled:opacity-50 text-sm uppercase tracking-widest"
+              >
+                {saving ? 'Saving...' : 'Create Invoice'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
